@@ -1,0 +1,5 @@
+{
+  "name": "Copilot Value Calendar",
+  "description": "A calendar app to track GitHub Copilot subscription value distribution across work days, with offline support via IndexedDB.",
+  "requestFramePermissions": []
+}
