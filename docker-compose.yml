@@ -1,6 +1,8 @@
 services:
   app:
     build: .
+    ports:
+      - "3000:3000"
     environment:
       - NODE_ENV=production
       - APP_URL=https://copilot.llamadio.dev
@@ -10,10 +12,14 @@ services:
     restart: always
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/user/github-status', (res) => res.statusCode === 200 ? process.exit(0) : process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 10s
+      timeout: 5s
+      retries: 5
     labels:
       - "coolify.managed=true"
       - "traefik.enable=true"
-      - "traefik.http.services.app.loadbalancer.server.port=3000"
+      - "traefik.http.routers.copilot-tracker.rule=Host(`copilot.llamadio.dev`)"
+      - "traefik.http.routers.copilot-tracker.entrypoints=websecure"
+      - "traefik.http.routers.copilot-tracker.tls=true"
+      - "traefik.http.routers.copilot-tracker.tls.certresolver=letsencrypt"
+      - "traefik.http.services.copilot-tracker.loadbalancer.server.port=3000"
