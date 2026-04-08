@@ -1,8 +1,6 @@
 services:
   app:
     build: .
-    ports:
-      - "3000:3000"
     environment:
       - NODE_ENV=production
       - APP_URL=https://copilot.llamadio.dev
@@ -10,3 +8,12 @@ services:
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GEMINI_API_KEY=${GEMINI_API_KEY}
     restart: always
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/user/github-status', (res) => res.statusCode === 200 ? process.exit(0) : process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "coolify.managed=true"
+      - "traefik.enable=true"
+      - "traefik.http.services.app.loadbalancer.server.port=3000"
