@@ -12,7 +12,7 @@ import {
   subMonths,
   isToday
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Settings as SettingsIcon, Github } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Settings as SettingsIcon, Github, Bot, Calendar as CalendarIcon } from 'lucide-react';
 import { UserSettings } from '../types';
 import { isWorkDay, calculateCycleData, calculateDayValue } from '../lib/calculations';
 import { cn } from '../lib/utils';
@@ -47,12 +47,21 @@ export default function Calendar({ settings, onOpenSettings }: CalendarProps) {
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-8">
       <header className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-4xl font-display font-bold tracking-tight text-zinc-900">
-            {format(currentMonth, 'MMMM yyyy')}
-          </h1>
-          <p className="text-zinc-500 font-mono text-xs uppercase tracking-widest mt-1 flex items-center gap-2">
-            Copilot Value Tracker
+        <div className="flex items-center gap-4">
+          <div className="relative">
+            <div className="w-12 h-12 bg-zinc-900 rounded-2xl flex items-center justify-center shadow-lg transform -rotate-6 group-hover:rotate-0 transition-transform">
+              <Bot className="w-7 h-7 text-white" />
+            </div>
+            <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-emerald-500 rounded-lg flex items-center justify-center shadow-md border-2 border-zinc-50">
+              <CalendarIcon className="w-3.5 h-3.5 text-white" />
+            </div>
+          </div>
+          <div>
+            <h1 className="text-4xl font-display font-bold tracking-tight text-zinc-900">
+              {format(currentMonth, 'MMMM yyyy')}
+            </h1>
+            <p className="text-zinc-500 font-mono text-xs uppercase tracking-widest mt-1 flex items-center gap-2">
+              Copilot Value Tracker
             {githubConnected && (
               <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 text-[10px] font-bold">
                 <Github className="w-3 h-3" />
@@ -61,7 +70,8 @@ export default function Calendar({ settings, onOpenSettings }: CalendarProps) {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+      </div>
+      <div className="flex items-center gap-2">
           <button 
             onClick={prevMonth}
             className="p-2 hover:bg-zinc-200 rounded-full transition-colors"
