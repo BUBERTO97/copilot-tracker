@@ -12,7 +12,7 @@ interface SettingsProps {
 
 export default function Settings({ settings, onSave, onClose }: SettingsProps) {
   const [localSettings, setLocalSettings] = useState<UserSettings>(settings);
-  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any }>({ connected: false });
+  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any; usage?: any }>({ connected: false });
   const [loading, setLoading] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -40,7 +40,19 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
       if (data.connected) {
         const infoRes = await fetch('/api/user/copilot-info');
         const info = await infoRes.json();
-        setGithubStatus({ connected: true, ...info });
+        
+        // Fetch usage data
+        let usage = null;
+        try {
+          const usageRes = await fetch('/api/user/copilot-usage');
+          if (usageRes.ok) {
+            usage = await usageRes.json();
+          }
+        } catch (err) {
+          console.error('Failed to fetch usage:', err);
+        }
+
+        setGithubStatus({ connected: true, ...info, usage });
       } else {
         setGithubStatus({ connected: false });
       }
@@ -332,14 +344,57 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
                 </div>
 
                 {githubStatus.copilot ? (
-                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="text-sm font-bold text-emerald-900">Copilot Active</p>
-                      <p className="text-xs text-emerald-700">
-                        Subscription found. We'll use this to sync your renewal cycle.
-                      </p>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-bold text-emerald-900">Copilot Active</p>
+                        <p className="text-xs text-emerald-700">
+                          Subscription found. We'll use this to sync your renewal cycle.
+                        </p>
+                      </div>
                     </div>
+
+                    {githubStatus.usage && (
+                      <div className="p-4 bg-zinc-900 text-white rounded-xl space-y-3 shadow-inner">
+                        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                          <h4 className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest">Usage Statistics</h4>
+                          <span className="text-[10px] font-mono text-zinc-500">Last 28 Days</span>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-[10px] font-mono text-zinc-500 uppercase mb-1">Total Suggestions</p>
+                            <p className="text-xl font-display font-bold">{githubStatus.usage[0]?.total_suggestions_count || 0}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-mono text-zinc-500 uppercase mb-1">Acceptance Rate</p>
+                            <p className="text-xl font-display font-bold">
+                              {githubStatus.usage[0]?.total_suggestions_count > 0 
+                                ? ((githubStatus.usage[0]?.total_acceptances_count / githubStatus.usage[0]?.total_suggestions_count) * 100).toFixed(1)
+                                : 0}%
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[10px] font-mono text-zinc-500 uppercase">
+                            <span>Lines Suggested</span>
+                            <span>{githubStatus.usage[0]?.total_lines_suggested || 0}</span>
+                          </div>
+                          <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-emerald-500" 
+                              style={{ width: `${Math.min(100, (githubStatus.usage[0]?.total_lines_accepted / githubStatus.usage[0]?.total_lines_suggested) * 100 || 0)}%` }}
+                            />
+                          </div>
+                          <div className="flex justify-between text-[10px] font-mono text-zinc-400">
+                            <span>Lines Accepted</span>
+                            <span>{githubStatus.usage[0]?.total_lines_accepted || 0}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 flex items-start gap-3">

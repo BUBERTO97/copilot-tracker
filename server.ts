@@ -154,6 +154,31 @@ async function startServer() {
     }
   });
 
+  app.get('/api/user/copilot-usage', async (req, res) => {
+    const token = req.cookies.github_token;
+    if (!token) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    try {
+      // GitHub Copilot Usage API endpoint
+      // Documentation: https://docs.github.com/en/rest/copilot/copilot-usage
+      const usageRes = await axios.get('https://api.github.com/user/copilot/usage', {
+        headers: { 
+          Authorization: `token ${token}`,
+          Accept: 'application/vnd.github+json'
+        }
+      });
+      res.json(usageRes.data);
+    } catch (error: any) {
+      console.error('Copilot Usage API Error:', error.response?.status, error.response?.data);
+      res.status(error.response?.status || 500).json({ 
+        error: 'Failed to fetch Copilot usage data',
+        details: error.response?.data
+      });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
