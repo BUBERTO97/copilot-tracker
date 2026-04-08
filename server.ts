@@ -82,6 +82,22 @@ async function startServer() {
     res.json({ connected: !!token });
   });
 
+  app.post('/api/auth/set-token', (req, res) => {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    res.cookie('github_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    });
+
+    res.json({ success: true });
+  });
+
   app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('github_token', {
       httpOnly: true,

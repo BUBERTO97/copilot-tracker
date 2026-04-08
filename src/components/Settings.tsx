@@ -14,6 +14,8 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
   const [localSettings, setLocalSettings] = useState<UserSettings>(settings);
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any }>({ connected: false });
   const [loading, setLoading] = useState(false);
+  const [showManualToken, setShowManualToken] = useState(false);
+  const [manualToken, setManualToken] = useState('');
 
   useEffect(() => {
     fetchGithubStatus();
@@ -69,6 +71,27 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
       setGithubStatus({ connected: false });
     } catch (err) {
       console.error('Failed to logout GitHub:', err);
+    }
+  };
+
+  const handleManualTokenSubmit = async () => {
+    if (!manualToken) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/set-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: manualToken }),
+      });
+      if (res.ok) {
+        setManualToken('');
+        setShowManualToken(false);
+        fetchGithubStatus();
+      }
+    } catch (err) {
+      console.error('Failed to set manual token:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -224,15 +247,66 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
             </label>
             
             {!githubStatus.connected ? (
-              <button
-                type="button"
-                onClick={handleConnectGithub}
-                disabled={loading}
-                className="w-full py-3 bg-zinc-900 text-white rounded-xl font-display font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-colors shadow-md disabled:opacity-50"
-              >
-                <Github className="w-5 h-5" />
-                {loading ? 'Connecting...' : 'Connect GitHub'}
-              </button>
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={handleConnectGithub}
+                  disabled={loading}
+                  className="w-full py-3 bg-zinc-900 text-white rounded-xl font-display font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-colors shadow-md disabled:opacity-50"
+                >
+                  <Github className="w-5 h-5" />
+                  {loading ? 'Connecting...' : 'Connect GitHub'}
+                </button>
+                
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-zinc-200" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-zinc-400 font-mono">Or</span>
+                  </div>
+                </div>
+
+                {!showManualToken ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowManualToken(true)}
+                    className="w-full py-2 text-xs font-mono font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
+                  >
+                    Use Personal Access Token (Classic)
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <input
+                      type="password"
+                      value={manualToken}
+                      onChange={(e) => setManualToken(e.target.value)}
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-zinc-900/10 transition-all"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleManualTokenSubmit}
+                        disabled={loading || !manualToken}
+                        className="flex-1 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-xs font-bold hover:bg-zinc-200 transition-colors disabled:opacity-50"
+                      >
+                        Save Token
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowManualToken(false)}
+                        className="px-4 py-2 text-zinc-400 hover:text-zinc-900 transition-colors text-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 leading-tight">
+                      Requires <code className="bg-zinc-100 px-1 rounded">read:user</code> and <code className="bg-zinc-100 px-1 rounded">manage_billing:copilot</code> scopes.
+                    </p>
+                  </div>
+                )}
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-200">
