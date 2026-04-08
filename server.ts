@@ -20,7 +20,7 @@ async function startServer() {
     const params = new URLSearchParams({
       client_id: process.env.GITHUB_CLIENT_ID!,
       redirect_uri: redirectUri,
-      scope: 'read:user,user:email', // Basic scopes, Copilot API might need more or specific ones
+      scope: 'read:user,user:email,manage_billing:copilot,read:org', 
     });
     const authUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
     res.json({ url: authUrl });
@@ -120,12 +120,16 @@ async function startServer() {
           user: userRes.data,
           copilot: copilotRes.data
         });
-      } catch (copilotErr) {
-        // If /user/copilot fails, maybe they don't have it or scope is missing
+      } catch (copilotErr: any) {
+        console.error('Copilot API Detail Error:', copilotErr.response?.status, copilotErr.response?.data);
+        
+        // If /user/copilot fails with 403/404, it's usually a scope or subscription issue
         res.json({
           user: userRes.data,
           copilot: null,
-          message: 'Could not fetch Copilot details. Ensure you have an active subscription and the app has correct scopes.'
+          message: copilotErr.response?.status === 403 
+            ? 'Access denied. Please ensure you have granted the "manage_billing:copilot" scope and your organization allows OAuth apps.'
+            : 'Could not fetch Copilot details. Ensure you have an active subscription.'
         });
       }
     } catch (error) {
