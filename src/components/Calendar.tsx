@@ -12,7 +12,7 @@ import {
   subMonths,
   isToday
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Settings as SettingsIcon, Github } from 'lucide-react';
 import { UserSettings } from '../types';
 import { isWorkDay, calculateCycleData, calculateDayValue } from '../lib/calculations';
 import { cn } from '../lib/utils';
@@ -26,12 +26,20 @@ interface CalendarProps {
 export default function Calendar({ settings, onOpenSettings }: CalendarProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [days, setDays] = useState<Date[]>([]);
+  const [githubConnected, setGithubConnected] = useState(false);
 
   useEffect(() => {
     const start = startOfWeek(startOfMonth(currentMonth), { weekStartsOn: settings.workWeekStart as any });
     const end = endOfWeek(endOfMonth(currentMonth), { weekStartsOn: settings.workWeekStart as any });
     setDays(eachDayOfInterval({ start, end }));
   }, [currentMonth, settings.workWeekStart]);
+
+  useEffect(() => {
+    fetch('/api/user/github-status')
+      .then(res => res.json())
+      .then(data => setGithubConnected(data.connected))
+      .catch(() => setGithubConnected(false));
+  }, []);
 
   const nextMonth = () => setCurrentMonth(addMonths(currentMonth, 1));
   const prevMonth = () => setCurrentMonth(subMonths(currentMonth, 1));
@@ -43,8 +51,14 @@ export default function Calendar({ settings, onOpenSettings }: CalendarProps) {
           <h1 className="text-4xl font-display font-bold tracking-tight text-zinc-900">
             {format(currentMonth, 'MMMM yyyy')}
           </h1>
-          <p className="text-zinc-500 font-mono text-xs uppercase tracking-widest mt-1">
+          <p className="text-zinc-500 font-mono text-xs uppercase tracking-widest mt-1 flex items-center gap-2">
             Copilot Value Tracker
+            {githubConnected && (
+              <span className="flex items-center gap-1 text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 text-[10px] font-bold">
+                <Github className="w-3 h-3" />
+                Synced
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">

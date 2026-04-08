@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - APP_URL=https://copilot.llamadio.dev
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    restart: always

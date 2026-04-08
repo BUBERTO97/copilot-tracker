@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { X, Save } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Save, Github, LogOut, CheckCircle2, AlertCircle } from 'lucide-react';
 import { UserSettings, RenewalType } from '../types';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
@@ -12,6 +12,65 @@ interface SettingsProps {
 
 export default function Settings({ settings, onSave, onClose }: SettingsProps) {
   const [localSettings, setLocalSettings] = useState<UserSettings>(settings);
+  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any }>({ connected: false });
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchGithubStatus();
+    
+    const handleMessage = (event: MessageEvent) => {
+      const origin = event.origin;
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
+        return;
+      }
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        fetchGithubStatus();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  const fetchGithubStatus = async () => {
+    try {
+      const res = await fetch('/api/user/github-status');
+      const data = await res.json();
+      if (data.connected) {
+        const infoRes = await fetch('/api/user/copilot-info');
+        const info = await infoRes.json();
+        setGithubStatus({ connected: true, ...info });
+      } else {
+        setGithubStatus({ connected: false });
+      }
+    } catch (err) {
+      console.error('Failed to fetch GitHub status:', err);
+    }
+  };
+
+  const handleConnectGithub = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/github/url');
+      const { url } = await res.json();
+      const authWindow = window.open(url, 'github_oauth', 'width=600,height=700');
+      if (!authWindow) {
+        alert('Please allow popups to connect your GitHub account.');
+      }
+    } catch (err) {
+      console.error('Failed to get GitHub auth URL:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogoutGithub = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      setGithubStatus({ connected: false });
+    } catch (err) {
+      console.error('Failed to logout GitHub:', err);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -157,6 +216,70 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
             <p className="text-[10px] text-zinc-400 font-mono">
               The total percentage will be distributed across work days to reach this target.
             </p>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t border-zinc-100">
+            <label className="text-xs font-mono font-bold text-zinc-400 uppercase tracking-tighter">
+              GitHub Integration
+            </label>
+            
+            {!githubStatus.connected ? (
+              <button
+                type="button"
+                onClick={handleConnectGithub}
+                disabled={loading}
+                className="w-full py-3 bg-zinc-900 text-white rounded-xl font-display font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-colors shadow-md disabled:opacity-50"
+              >
+                <Github className="w-5 h-5" />
+                {loading ? 'Connecting...' : 'Connect GitHub'}
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-200">
+                  <div className="flex items-center gap-3">
+                    <img 
+                      src={githubStatus.user?.avatar_url} 
+                      alt="GitHub Avatar" 
+                      className="w-8 h-8 rounded-full border border-zinc-200"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div>
+                      <p className="text-sm font-bold text-zinc-900">{githubStatus.user?.login}</p>
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase">Connected</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLogoutGithub}
+                    className="p-2 text-zinc-400 hover:text-red-500 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {githubStatus.copilot ? (
+                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-bold text-emerald-900">Copilot Active</p>
+                      <p className="text-xs text-emerald-700">
+                        Subscription found. We'll use this to sync your renewal cycle.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-bold text-amber-900">No Copilot Found</p>
+                      <p className="text-xs text-amber-700">
+                        We couldn't find an active Copilot subscription for this account.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <button 
