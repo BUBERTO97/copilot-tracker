@@ -232,7 +232,10 @@ async function startServer() {
       const tokenRes = await axios.get('https://api.github.com/copilot_internal/v2/token', {
         headers: { 
           Authorization: `token ${token}`,
-          Accept: 'application/json'
+          Accept: 'application/json',
+          'User-Agent': 'GithubCopilot/1.156.0',
+          'Editor-Version': 'vscode/1.83.0',
+          'Editor-Plugin-Version': 'copilot/1.156.0'
         }
       });
       res.json(tokenRes.data);
