@@ -121,35 +121,68 @@ async function startServer() {
       const userRes = await axios.get('https://api.github.com/user', {
         headers: { Authorization: `token ${token}` }
       });
+      const username = userRes.data.login;
 
-      // GitHub Copilot API endpoint (requires specific permissions/scopes)
-      // For now, we'll try to fetch it, but handle failure gracefully
-      // Documentation: https://docs.github.com/en/rest/copilot/copilot-user-details
+      let copilotData = null;
+      let message = '';
+
+      // 1. Try Individual Seat
       try {
-        const copilotRes = await axios.get('https://api.github.com/user/copilot', {
+        const individualRes = await axios.get('https://api.github.com/user/copilot', {
           headers: { 
             Authorization: `token ${token}`,
             Accept: 'application/vnd.github+json'
           }
         });
-        res.json({
-          user: userRes.data,
-          copilot: copilotRes.data
-        });
-      } catch (copilotErr: any) {
-        console.error('Copilot API Detail Error:', copilotErr.response?.status, copilotErr.response?.data);
-        
-        // If /user/copilot fails with 403/404, it's usually a scope or subscription issue
-        res.json({
-          user: userRes.data,
-          copilot: null,
-          message: copilotErr.response?.status === 403 
-            ? 'Access denied. Please ensure you have granted the "manage_billing:copilot" scope and your organization allows OAuth apps.'
-            : 'Could not fetch Copilot details. Ensure you have an active subscription.'
-        });
+        copilotData = individualRes.data;
+      } catch (err: any) {
+        // 404 is expected if not an individual subscriber
+        if (err.response?.status !== 404) {
+          console.error('Individual Copilot API Error:', err.response?.status);
+        }
       }
-    } catch (error) {
-      console.error('GitHub API Error:', error);
+
+      // 2. If no individual seat, check Organizations
+      if (!copilotData) {
+        try {
+          const orgsRes = await axios.get('https://api.github.com/user/orgs', {
+            headers: { Authorization: `token ${token}` }
+          });
+          
+          const orgs = orgsRes.data;
+          for (const org of orgs) {
+            try {
+              const orgCopilotRes = await axios.get(`https://api.github.com/orgs/${org.login}/members/${username}/copilot`, {
+                headers: { 
+                  Authorization: `token ${token}`,
+                  Accept: 'application/vnd.github+json'
+                }
+              });
+              if (orgCopilotRes.data) {
+                copilotData = orgCopilotRes.data;
+                copilotData.organization = org; // Attach org info
+                break;
+              }
+            } catch (e: any) {
+              // 404 means no seat in this org
+            }
+          }
+        } catch (orgErr) {
+          console.error('Failed to fetch user orgs:', orgErr);
+        }
+      }
+
+      if (!copilotData) {
+        message = 'Could not find an active Copilot seat (Individual or Organization). Ensure you have a seat assigned and the token has "manage_billing:copilot" and "read:org" scopes.';
+      }
+
+      res.json({
+        user: userRes.data,
+        copilot: copilotData,
+        message
+      });
+    } catch (error: any) {
+      console.error('GitHub API Error:', error.response?.status, error.response?.data);
       res.status(500).json({ error: 'Failed to fetch GitHub data' });
     }
   });
@@ -163,6 +196,7 @@ async function startServer() {
     try {
       // GitHub Copilot Usage API endpoint
       // Documentation: https://docs.github.com/en/rest/copilot/copilot-usage
+      // Note: This endpoint is only for Business/Enterprise seats.
       const usageRes = await axios.get('https://api.github.com/user/copilot/usage', {
         headers: { 
           Authorization: `token ${token}`,
@@ -171,6 +205,14 @@ async function startServer() {
       });
       res.json(usageRes.data);
     } catch (error: any) {
+      // If 404, it might be an individual account which doesn't support this API
+      if (error.response?.status === 404) {
+        return res.status(404).json({ 
+          error: 'Usage data not available for this account type.',
+          message: 'The Copilot Usage API is only available for Business and Enterprise subscriptions.'
+        });
+      }
+      
       console.error('Copilot Usage API Error:', error.response?.status, error.response?.data);
       res.status(error.response?.status || 500).json({ 
         error: 'Failed to fetch Copilot usage data',

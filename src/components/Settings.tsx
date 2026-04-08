@@ -350,12 +350,14 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
                       <div>
                         <p className="text-sm font-bold text-emerald-900">Copilot Active</p>
                         <p className="text-xs text-emerald-700">
-                          Subscription found. We'll use this to sync your renewal cycle.
+                          {githubStatus.copilot.organization 
+                            ? `Seat managed by ${githubStatus.copilot.organization.login}`
+                            : 'Individual subscription found.'}
                         </p>
                       </div>
                     </div>
 
-                    {githubStatus.usage && (
+                    {githubStatus.usage && !githubStatus.usage.error ? (
                       <div className="p-4 bg-zinc-900 text-white rounded-xl space-y-3 shadow-inner">
                         <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
                           <h4 className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest">Usage Statistics</h4>
@@ -394,7 +396,14 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
                           </div>
                         </div>
                       </div>
-                    )}
+                    ) : githubStatus.usage?.error ? (
+                      <div className="p-3 bg-zinc-100 rounded-xl border border-zinc-200">
+                        <p className="text-[10px] font-mono font-bold text-zinc-400 uppercase mb-1">Usage Statistics</p>
+                        <p className="text-[10px] text-zinc-500 leading-tight">
+                          {githubStatus.usage.message || 'Usage data is only available for Business/Enterprise accounts.'}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 flex items-start gap-3">
