@@ -12,7 +12,7 @@ interface SettingsProps {
 
 export default function Settings({ settings, onSave, onClose }: SettingsProps) {
   const [localSettings, setLocalSettings] = useState<UserSettings>(settings);
-  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any; usage?: any }>({ connected: false });
+  const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any; quota?: any }>({ connected: false });
   const [loading, setLoading] = useState(false);
   const [showManualToken, setShowManualToken] = useState(false);
   const [manualToken, setManualToken] = useState('');
@@ -41,18 +41,18 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
         const infoRes = await fetch('/api/user/copilot-info');
         const info = await infoRes.json();
         
-        // Fetch usage data
-        let usage = null;
+        // Fetch quota data
+        let quota = null;
         try {
-          const usageRes = await fetch('/api/user/copilot-usage');
-          if (usageRes.ok) {
-            usage = await usageRes.json();
+          const quotaRes = await fetch('/api/user/copilot-quota');
+          if (quotaRes.ok) {
+            quota = await quotaRes.json();
           }
         } catch (err) {
-          console.error('Failed to fetch usage:', err);
+          console.error('Failed to fetch quota:', err);
         }
 
-        setGithubStatus({ connected: true, ...info, usage });
+        setGithubStatus({ connected: true, ...info, quota });
       } else {
         setGithubStatus({ connected: false });
       }
@@ -251,6 +251,167 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
             <p className="text-[10px] text-zinc-400 font-mono">
               The total percentage will be distributed across work days to reach this target.
             </p>
+          </div>
+
+          <div className="space-y-4 pt-4 border-t border-zinc-100">
+            <label className="text-xs font-mono font-bold text-zinc-400 uppercase tracking-tighter">
+              GitHub Integration
+            </label>
+            
+            {!githubStatus.connected ? (
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={handleConnectGithub}
+                  disabled={loading}
+                  className="w-full py-3 bg-zinc-900 text-white rounded-xl font-display font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-colors shadow-md disabled:opacity-50"
+                >
+                  <Github className="w-5 h-5" />
+                  {loading ? 'Connecting...' : 'Connect GitHub'}
+                </button>
+                
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-zinc-200" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-zinc-400 font-mono">Or</span>
+                  </div>
+                </div>
+
+                {!showManualToken ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowManualToken(true)}
+                    className="w-full py-2 text-xs font-mono font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
+                  >
+                    Use Personal Access Token (Classic)
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <input
+                      type="password"
+                      value={manualToken}
+                      onChange={(e) => setManualToken(e.target.value)}
+                      placeholder="ghp_xxxxxxxxxxxx"
+                      className="w-full px-4 py-2 bg-zinc-50 border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-zinc-900/10 transition-all"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleManualTokenSubmit}
+                        disabled={loading || !manualToken}
+                        className="flex-1 py-2 bg-zinc-100 text-zinc-900 rounded-lg text-xs font-bold hover:bg-zinc-200 transition-colors disabled:opacity-50"
+                      >
+                        Save Token
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowManualToken(false)}
+                        className="px-4 py-2 text-zinc-400 hover:text-zinc-900 transition-colors text-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 leading-tight">
+                      Requires <code className="bg-zinc-100 px-1 rounded">read:user</code> and <code className="bg-zinc-100 px-1 rounded">manage_billing:copilot</code> scopes.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-200">
+                  <div className="flex items-center gap-3">
+                    <img 
+                      src={githubStatus.user?.avatar_url} 
+                      alt="GitHub Avatar" 
+                      className="w-8 h-8 rounded-full border border-zinc-200"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div>
+                      <p className="text-sm font-bold text-zinc-900">{githubStatus.user?.login}</p>
+                      <p className="text-[10px] font-mono text-zinc-500 uppercase">Connected</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLogoutGithub}
+                    className="p-2 text-zinc-400 hover:text-red-500 transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {githubStatus.quota ? (
+                  <div className="space-y-3">
+                    <div className="p-4 bg-zinc-900 text-white rounded-xl space-y-4 shadow-inner">
+                      <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                        <h4 className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest">GitHub Copilot Quota Usage</h4>
+                      </div>
+                      
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-zinc-300">Chat messages</span>
+                          <span className="text-zinc-500">included</span>
+                        </div>
+                        <div className="h-px bg-zinc-800 w-full" />
+                        
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-zinc-300">Code completions</span>
+                          <span className="text-zinc-500">included</span>
+                        </div>
+                        <div className="h-px bg-zinc-800 w-full" />
+
+                        <div className="space-y-2">
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-zinc-300">Included premium requests</span>
+                            <span className="text-zinc-400">
+                              {githubStatus.quota.quota?.premium_requests?.limit > 0 
+                                ? `${((githubStatus.quota.quota.premium_requests.usage / githubStatus.quota.quota.premium_requests.limit) * 100).toFixed(1)}%`
+                                : '0%'}
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                            <div 
+                              className="h-full bg-blue-500 rounded-full" 
+                              style={{ width: `${githubStatus.quota.quota?.premium_requests?.limit > 0 ? (githubStatus.quota.quota.premium_requests.usage / githubStatus.quota.quota.premium_requests.limit) * 100 : 0}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="pt-2 text-xs text-zinc-500 leading-relaxed">
+                        <p>Additional premium requests approved.</p>
+                        <p>You can continue after included premium requests limit reaches 100%.</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : githubStatus.copilot ? (
+                  <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-bold text-emerald-900">Copilot Active</p>
+                      <p className="text-xs text-emerald-700">
+                        {githubStatus.copilot.organization 
+                          ? `Seat managed by ${githubStatus.copilot.organization.login}`
+                          : 'Individual subscription found.'}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-100 flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-bold text-amber-900">No Copilot Found</p>
+                      <p className="text-xs text-amber-700">
+                        We couldn't find an active Copilot subscription for this account.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <button 

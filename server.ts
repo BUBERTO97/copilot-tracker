@@ -221,6 +221,30 @@ async function startServer() {
     }
   });
 
+  app.get('/api/user/copilot-quota', async (req, res) => {
+    const token = req.cookies.github_token;
+    if (!token) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    try {
+      // Fetch the internal Copilot token which often contains quota/plan info
+      const tokenRes = await axios.get('https://api.github.com/copilot_internal/v2/token', {
+        headers: { 
+          Authorization: `token ${token}`,
+          Accept: 'application/json'
+        }
+      });
+      res.json(tokenRes.data);
+    } catch (error: any) {
+      console.error('Copilot Quota API Error:', error.response?.status, error.response?.data);
+      res.status(error.response?.status || 500).json({ 
+        error: 'Failed to fetch Copilot quota data',
+        details: error.response?.data
+      });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
