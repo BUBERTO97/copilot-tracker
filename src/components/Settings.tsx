@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Github, LogOut, CheckCircle2, AlertCircle } from 'lucide-react';
-import { UserSettings, RenewalType } from '../types';
+import { X, Save, Github, LogOut, CheckCircle2, AlertCircle, TrendingUp } from 'lucide-react';
+import { UserSettings, RenewalType, CopilotUsageSummary } from '../types';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
+import { calculateDayValue, calculateCycleData } from '../lib/calculations';
+import { format } from 'date-fns';
 
 interface SettingsProps {
   settings: UserSettings;
   onSave: (settings: UserSettings) => void;
   onClose: () => void;
+  usage: CopilotUsageSummary;
 }
 
-export default function Settings({ settings, onSave, onClose }: SettingsProps) {
+export default function Settings({ settings, onSave, onClose, usage }: SettingsProps) {
   const [localSettings, setLocalSettings] = useState<UserSettings>(settings);
   const [githubStatus, setGithubStatus] = useState<{ connected: boolean; user?: any; copilot?: any; quota?: any }>({ connected: false });
   const [loading, setLoading] = useState(false);
@@ -343,47 +346,81 @@ export default function Settings({ settings, onSave, onClose }: SettingsProps) {
                   </button>
                 </div>
 
-                {githubStatus.quota ? (
+                {githubStatus.quota || usage.connected ? (
                   <div className="space-y-3">
                     <div className="p-4 bg-zinc-900 text-white rounded-xl space-y-4 shadow-inner">
                       <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
                         <h4 className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest">GitHub Copilot Quota Usage</h4>
                       </div>
-                      
+
                       <div className="space-y-3">
                         <div className="flex justify-between items-center text-sm">
                           <span className="text-zinc-300">Chat messages</span>
                           <span className="text-zinc-500">included</span>
                         </div>
                         <div className="h-px bg-zinc-800 w-full" />
-                        
+
                         <div className="flex justify-between items-center text-sm">
                           <span className="text-zinc-300">Code completions</span>
                           <span className="text-zinc-500">included</span>
                         </div>
                         <div className="h-px bg-zinc-800 w-full" />
 
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-sm">
-                            <span className="text-zinc-300">Included premium requests</span>
-                            <span className="text-zinc-400">
-                              {githubStatus.quota.quota?.premium_requests?.limit > 0 
-                                ? `${((githubStatus.quota.quota.premium_requests.usage / githubStatus.quota.quota.premium_requests.limit) * 100).toFixed(1)}%`
-                                : '0%'}
-                            </span>
-                          </div>
-                          <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-blue-500 rounded-full" 
-                              style={{ width: `${githubStatus.quota.quota?.premium_requests?.limit > 0 ? (githubStatus.quota.quota.premium_requests.usage / githubStatus.quota.quota.premium_requests.limit) * 100 : 0}%` }}
-                            />
-                          </div>
-                        </div>
+                        {/* Premium requests — prefer live usage hook data, fall back to quota token */}
+                        {(() => {
+                          const limit = usage.limit || githubStatus.quota?.quota?.premium_requests?.limit || 0;
+                          const used = usage.connected
+                            ? usage.cycleTotal
+                            : (githubStatus.quota?.quota?.premium_requests?.usage ?? 0);
+                          const pct = limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+                          const { cycleStart, cycleEnd } = calculateCycleData(new Date(), settings);
+                          const todayPct = calculateDayValue(new Date(), settings).cumulativePercentage;
+                          const actualPct = limit > 0 ? (used / limit) * 100 : 0;
+                          const delta = actualPct - todayPct;
+                          const statusColor = delta > 5 ? 'text-red-400' : delta < -10 ? 'text-amber-400' : 'text-emerald-400';
+                          const statusLabel = delta > 5 ? '▲ Over target' : delta < -10 ? '▼ Under target' : '✓ On track';
+
+                          return (
+                            <div className="space-y-2">
+                              <div className="flex justify-between items-center text-sm">
+                                <span className="text-zinc-300">Premium requests</span>
+                                <span className="text-zinc-400">
+                                  {used} / {limit > 0 ? limit : '—'}
+                                  {limit > 0 && ` (${pct.toFixed(1)}%)`}
+                                </span>
+                              </div>
+                              <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden relative">
+                                {/* target marker */}
+                                {limit > 0 && (
+                                  <div
+                                    className="absolute top-0 bottom-0 w-0.5 bg-zinc-400 z-10"
+                                    style={{ left: `${Math.min(todayPct, 100)}%` }}
+                                  />
+                                )}
+                                <div
+                                  className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              {limit > 0 && (
+                                <div className="flex justify-between items-center">
+                                  <span className={cn("text-[10px] font-mono font-bold", statusColor)}>{statusLabel}</span>
+                                  <span className="text-[10px] font-mono text-zinc-600">
+                                    Target today: {todayPct.toFixed(1)}%
+                                  </span>
+                                </div>
+                              )}
+                              <div className="text-[10px] font-mono text-zinc-600">
+                                Cycle: {format(cycleStart, 'MMM d')} – {format(cycleEnd, 'MMM d, yyyy')}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
-                      
+
                       <div className="pt-2 text-xs text-zinc-500 leading-relaxed">
-                        <p>Additional premium requests approved.</p>
-                        <p>You can continue after included premium requests limit reaches 100%.</p>
+                        <p>Additional premium requests available after limit is reached.</p>
+                        <p>The green marker shows where your target pace should be today.</p>
                       </div>
                     </div>
                   </div>

@@ -14,3 +14,17 @@ export interface DayData {
   isWorkDay: boolean;
   percentage: number;
 }
+
+export interface CopilotDayUsage {
+  date: string; // YYYY-MM-DD
+  total_completions: number;
+  total_chat_turns: number;
+  premium_requests: number;
+}
+
+export interface CopilotUsageSummary {
+  connected: boolean;
+  cycleTotal: number;       // total premium requests used in cycle
+  limit: number;            // monthly premium request limit
+  byDate: Record<string, CopilotDayUsage>;
+}

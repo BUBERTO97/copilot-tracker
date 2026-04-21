@@ -221,6 +221,37 @@ async function startServer() {
     }
   });
 
+  // Fetch real Copilot usage metrics per day (requires apiVersion 2026-03-10)
+  app.get('/api/user/copilot-usage-metrics', async (req, res) => {
+    const token = req.cookies.github_token;
+    if (!token) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { since, until } = req.query as { since?: string; until?: string };
+    const params: Record<string, string> = {};
+    if (since) params.since = since;
+    if (until) params.until = until;
+
+    try {
+      const usageRes = await axios.get('https://api.github.com/user/copilot/usage', {
+        headers: {
+          Authorization: `token ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2026-03-10',
+        },
+        params,
+      });
+      res.json(usageRes.data);
+    } catch (error: any) {
+      console.error('Copilot Usage Metrics Error:', error.response?.status, error.response?.data);
+      res.status(error.response?.status || 500).json({
+        error: 'Failed to fetch usage metrics',
+        details: error.response?.data,
+      });
+    }
+  });
+
   app.get('/api/user/copilot-quota', async (req, res) => {
     const token = req.cookies.github_token;
     if (!token) {

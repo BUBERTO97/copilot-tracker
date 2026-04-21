@@ -9,6 +9,7 @@ import Settings from './components/Settings';
 import { UserSettings } from './types';
 import { loadSettings, saveSettings } from './lib/db';
 import { AnimatePresence } from 'motion/react';
+import { useGithubUsage } from './lib/useGithubUsage';
 
 export default function App() {
   const [settings, setSettings] = useState<UserSettings | null>(null);
@@ -39,23 +40,40 @@ export default function App() {
     );
   }
 
+  return <AppInner settings={settings} onSaveSettings={handleSaveSettings} isSettingsOpen={isSettingsOpen} setIsSettingsOpen={setIsSettingsOpen} />;
+}
+
+function AppInner({ settings, onSaveSettings, isSettingsOpen, setIsSettingsOpen }: {
+  settings: UserSettings;
+  onSaveSettings: (s: UserSettings) => void;
+  isSettingsOpen: boolean;
+  setIsSettingsOpen: (v: boolean) => void;
+}) {
+  const { usage, refresh } = useGithubUsage(settings);
+
+  const handleSave = async (s: UserSettings) => {
+    onSaveSettings(s);
+    setTimeout(refresh, 500); // re-fetch usage after settings change
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 selection:bg-zinc-900 selection:text-white">
-      <Calendar 
-        settings={settings} 
-        onOpenSettings={() => setIsSettingsOpen(true)} 
+      <Calendar
+        settings={settings}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        usage={usage}
       />
-      
+
       <AnimatePresence>
         {isSettingsOpen && (
-          <Settings 
-            settings={settings} 
-            onSave={handleSaveSettings} 
-            onClose={() => setIsSettingsOpen(false)} 
+          <Settings
+            settings={settings}
+            onSave={handleSave}
+            onClose={() => setIsSettingsOpen(false)}
+            usage={usage}
           />
         )}
       </AnimatePresence>
     </div>
   );
 }
-
