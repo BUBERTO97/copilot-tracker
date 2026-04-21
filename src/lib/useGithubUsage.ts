@@ -1,7 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { format, addDays } from 'date-fns';
 import { UserSettings, CopilotDayUsage, CopilotUsageSummary } from '../types';
-import { getSubscriptionCycle } from './calculations';
 
 const EMPTY: CopilotUsageSummary = { connected: false, cycleTotal: 0, limit: 0, byDate: {} };
 
@@ -10,9 +8,11 @@ export interface CopilotUsageSummaryEx extends CopilotUsageSummary {
   message?: string;
   planType?: string;
   orgsWithData?: string[];
+  reportStartDay?: string;
+  reportEndDay?: string;
 }
 
-export function useGithubUsage(settings: UserSettings) {
+export function useGithubUsage(_settings: UserSettings) {
   const [usage, setUsage] = useState<CopilotUsageSummaryEx>(EMPTY);
 
   const fetchUsage = useCallback(async () => {
@@ -24,16 +24,13 @@ export function useGithubUsage(settings: UserSettings) {
         return;
       }
 
-      const { start, end } = getSubscriptionCycle(new Date(), settings);
-      const since = format(start, 'yyyy-MM-dd');
-      const until = format(addDays(end, -1), 'yyyy-MM-dd');
-
+      // The 2026-03-10 reports API returns a fixed 28-day window (latest) —
+      // no since/until parameters are supported. Cycle filtering is done client-side.
       const [usageRes, quotaRes] = await Promise.all([
-        fetch(`/api/user/copilot-usage-metrics?since=${since}&until=${until}`),
+        fetch('/api/user/copilot-usage-metrics'),
         fetch('/api/user/copilot-quota'),
       ]);
 
-      // Quota — limit + plan type
       let limit = 0;
       let planType = 'unknown';
       if (quotaRes.ok) {
@@ -42,11 +39,12 @@ export function useGithubUsage(settings: UserSettings) {
         planType = q.plan_type ?? 'unknown';
       }
 
-      // Usage metrics — server now returns { days, scope, message, orgs_with_data }
       let days: any[] = [];
       let scope: 'individual' | 'organization' = 'individual';
       let message: string | undefined;
       let orgsWithData: string[] = [];
+      let reportStartDay: string | undefined;
+      let reportEndDay: string | undefined;
 
       if (usageRes.ok) {
         const data = await usageRes.json();
@@ -54,6 +52,8 @@ export function useGithubUsage(settings: UserSettings) {
         scope = data.scope ?? 'individual';
         message = data.message;
         orgsWithData = data.orgs_with_data ?? [];
+        reportStartDay = data.report_start_day;
+        reportEndDay = data.report_end_day;
       }
 
       const byDate: Record<string, CopilotDayUsage> = {};
@@ -79,11 +79,13 @@ export function useGithubUsage(settings: UserSettings) {
         message,
         planType,
         orgsWithData,
+        reportStartDay,
+        reportEndDay,
       });
     } catch (err) {
       console.error('Failed to fetch Copilot usage:', err);
     }
-  }, [settings]);
+  }, []);
 
   useEffect(() => {
     fetchUsage();

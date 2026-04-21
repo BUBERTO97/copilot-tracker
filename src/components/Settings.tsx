@@ -124,10 +124,10 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-zinc-900/40 backdrop-blur-sm"
     >
       <motion.div 
-        initial={{ scale: 0.95, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
+        initial={{ scale: 0.95, opacity: 0, overflow: 'auto' }}
+        animate={{ scale: 1, opacity: 1, overflow: 'auto' }}
+        exit={{ scale: 0.95, opacity: 0, overflow: 'auto' }}
+        className="bg-white w-full h-full max-w-md rounded-2xl shadow-2xl overflow-hidden"
       >
         <div className="p-6 border-b border-zinc-100 flex items-center justify-between">
           <h2 className="text-xl font-display font-bold">Configuration</h2>
@@ -429,6 +429,11 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
                         {usage.scope === 'organization' && usage.orgsWithData && usage.orgsWithData.length > 0 && (
                           <p className="text-emerald-400">
                             ✓ Aggregated from {usage.orgsWithData.length} org(s): {usage.orgsWithData.join(', ')}
+                          </p>
+                        )}
+                        {usage.reportStartDay && usage.reportEndDay && (
+                          <p className="text-zinc-500">
+                            Report window: {usage.reportStartDay} → {usage.reportEndDay} (GitHub 28-day report)
                           </p>
                         )}
                         {usage.message && (
