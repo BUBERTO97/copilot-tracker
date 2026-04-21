@@ -272,7 +272,7 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
                   type="text"
                   value={localSettings.organizationSlug ?? ''}
                   onChange={(e) => setLocalSettings({ ...localSettings, organizationSlug: e.target.value.trim() || undefined })}
-                  placeholder="e.g. ELX-EMCC-DevOps"
+                  placeholder="e.g. MY-ORG"
                   className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-zinc-900/10 transition-all"
                 />
               </div>
@@ -463,8 +463,12 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
                         )}
                         {usage.scope === 'organization' && usage.orgsWithData && usage.orgsWithData.length > 0 && (
                           <p className="text-emerald-400">
-                            ✓ Aggregated from {usage.orgsWithData.length} org(s): {usage.orgsWithData.join(', ')}
+                            ✓ Data from {usage.orgsWithData.join(', ')}
+                            {usage.dataTier && ` (via ${usage.dataTier})`}
                           </p>
+                        )}
+                        {usage.dataNote && (
+                          <p className="text-amber-400/80">ⓘ {usage.dataNote}</p>
                         )}
                         {usage.message && (
                           <p className="text-zinc-500">{usage.message}</p>

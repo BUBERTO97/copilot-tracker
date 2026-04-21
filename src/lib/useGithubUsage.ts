@@ -10,6 +10,8 @@ export interface CopilotUsageSummaryEx extends CopilotUsageSummary {
   orgsWithData?: string[];
   reportStartDay?: string;
   reportEndDay?: string;
+  dataTier?: string;
+  dataNote?: string;
 }
 
 export function useGithubUsage(settings: UserSettings) {
@@ -49,6 +51,8 @@ export function useGithubUsage(settings: UserSettings) {
       let orgsWithData: string[] = [];
       let reportStartDay: string | undefined;
       let reportEndDay: string | undefined;
+      let dataTier: string | undefined;
+      let dataNote: string | undefined;
 
       if (usageRes.ok) {
         const data = await usageRes.json();
@@ -58,6 +62,8 @@ export function useGithubUsage(settings: UserSettings) {
         orgsWithData = data.orgs_with_data ?? [];
         reportStartDay = data.report_start_day;
         reportEndDay = data.report_end_day;
+        dataTier = data.data_tier;
+        dataNote = data.data_note;
       }
 
       const byDate: Record<string, CopilotDayUsage> = {};
@@ -85,6 +91,8 @@ export function useGithubUsage(settings: UserSettings) {
         orgsWithData,
         reportStartDay,
         reportEndDay,
+        dataTier,
+        dataNote,
       });
     } catch (err) {
       console.error('Failed to fetch Copilot usage:', err);

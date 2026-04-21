@@ -233,16 +233,22 @@ async function startServer() {
   /**
    * GET /api/user/copilot-usage-metrics
    *
-   * Official Copilot Usage Metrics API (apiVersion 2026-03-10).
-   * All endpoints return signed download_links — not data directly.
-   *   https://docs.github.com/en/rest/copilot/copilot-usage-metrics?apiVersion=2026-03-10
+   * Multi-tier approach because different endpoints have different permission levels:
    *
-   * Query params:
-   *   ?org=SLUG           — explicit org slug (preferred; bypasses /user/orgs which misses SAML-SSO/private orgs)
-   *   ?enterprise=SLUG    — explicit enterprise slug (uses /enterprises/{SLUG}/copilot/metrics/reports/...)
+   * Tier 1: /orgs/{org}/copilot/metrics/reports/users-28-day/latest  (2026-03-10 API)
+   *         → Requires: org admin / billing manager / "View Organization Copilot Metrics" fine-grained permission
+   *         → Best data: per-user daily breakdown with premium request counts
    *
-   * If neither is provided, auto-discovers via /user/memberships/orgs
-   * (which includes private memberships, unlike /user/orgs).
+   * Tier 2: /orgs/{org}/copilot/metrics  (older API, still available)
+   *         → Requires: org owner OR manage_billing:copilot scope on token
+   *         → Returns: aggregate org-level daily metrics (not per-user, but still useful)
+   *
+   * Tier 3: /orgs/{org}/members/{user}/copilot  (seat info only)
+   *         → Requires: manage_billing:copilot
+   *         → Gives us seat info + plan to derive limits (no usage data)
+   *
+   * Your IDE shows quota because it uses internal Copilot extension APIs
+   * (copilot_internal/*) that use a special auth flow, not a PAT.
    */
   app.get('/api/user/copilot-usage-metrics', async (req, res) => {
     const token = req.cookies.github_token;
@@ -271,50 +277,38 @@ async function startServer() {
       });
     }
 
-    // 2. Build the list of report sources to query
+    // 2. Build the list of sources to query
     interface ReportSource { kind: 'org' | 'enterprise'; slug: string; }
     const sources: ReportSource[] = [];
 
     if (entSlug) sources.push({ kind: 'enterprise', slug: entSlug });
     if (orgSlug) sources.push({ kind: 'org', slug: orgSlug });
 
-    // Auto-discovery fallback — only if the user didn't specify anything
+    // Auto-discovery
     if (sources.length === 0) {
-      // /user/memberships/orgs includes PRIVATE memberships (unlike /user/orgs)
-      // and is the correct endpoint for SAML-SSO-protected org discovery.
       try {
-        const mRes = await axios.get('https://api.github.com/user/memberships/orgs?state=active', {
-          headers: ghHeaders,
-        });
+        const mRes = await axios.get('https://api.github.com/user/memberships/orgs?state=active', { headers: ghHeaders });
         for (const m of (mRes.data as any[])) {
           if (m.organization?.login) sources.push({ kind: 'org', slug: m.organization.login });
         }
-      } catch (err: any) {
-        console.error('Failed to list org memberships:', err.response?.status);
-      }
-
-      // Secondary fallback: /user/orgs (public only)
+      } catch {}
       if (sources.length === 0) {
         try {
           const oRes = await axios.get('https://api.github.com/user/orgs', { headers: ghHeaders });
           for (const o of (oRes.data as any[])) {
             if (o.login) sources.push({ kind: 'org', slug: o.login });
           }
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
     }
 
     if (sources.length === 0) {
       return res.json({
-        days: [],
-        scope: 'individual',
-        message: 'No organization or enterprise specified, and none found via /user/memberships/orgs. For SAML-SSO-protected orgs, specify the slug explicitly in Settings → GitHub Integration → Org/Enterprise slug. Note: SSO-protected orgs require the token to be authorized for SSO (Settings → Developer settings → PAT → Configure SSO).',
+        days: [], scope: 'individual',
+        message: 'No org/enterprise found. Specify one in Settings → Organization Slug.',
       });
     }
 
-    // 3. Per-day aggregation filtered to the authenticated user
     const merged: Record<string, {
       date: string;
       total_completions: number;
@@ -323,82 +317,174 @@ async function startServer() {
       sources: string[];
     }> = {};
 
-    const errors: Array<{ source: string; kind: string; status?: number; message?: string }> = [];
+    const attempts: Array<{ source: string; tier: string; status: string; detail?: string }> = [];
     let reportStartDay: string | undefined;
     let reportEndDay: string | undefined;
+    let dataTier = 'none';
 
     for (const src of sources) {
-      const reportPath = src.kind === 'enterprise'
-        ? `https://api.github.com/enterprises/${src.slug}/copilot/metrics/reports/users-28-day/latest`
-        : `https://api.github.com/orgs/${src.slug}/copilot/metrics/reports/users-28-day/latest`;
+      // ───── TIER 1: users-28-day report (admin only) ─────
+      if (src.kind === 'org' || src.kind === 'enterprise') {
+        const reportPath = src.kind === 'enterprise'
+          ? `https://api.github.com/enterprises/${src.slug}/copilot/metrics/reports/users-28-day/latest`
+          : `https://api.github.com/orgs/${src.slug}/copilot/metrics/reports/users-28-day/latest`;
 
-      let reportMeta: { download_links: string[]; report_start_day: string; report_end_day: string };
-      try {
-        const metaRes = await axios.get(reportPath, { headers: ghHeaders });
-        reportMeta = metaRes.data;
-        reportStartDay = reportStartDay ?? reportMeta.report_start_day;
-        reportEndDay = reportEndDay ?? reportMeta.report_end_day;
-      } catch (err: any) {
-        const status = err.response?.status;
-        const msg = err.response?.data?.message || err.message;
-        errors.push({ source: src.slug, kind: src.kind, status, message: msg });
-        console.error(`[${src.kind}:${src.slug}] users-28-day report error:`, status, msg);
-        continue;
-      }
-
-      if (!reportMeta.download_links?.length) {
-        errors.push({ source: src.slug, kind: src.kind, message: 'Report returned no download_links' });
-        continue;
-      }
-
-      for (const url of reportMeta.download_links) {
         try {
-          const reportRes = await axios.get(url, {
-            headers: { Accept: 'application/json' },
-            transformRequest: [(d, h) => { delete (h as any).Authorization; return d; }],
-            maxContentLength: 50 * 1024 * 1024,
-          });
+          const metaRes = await axios.get(reportPath, { headers: ghHeaders });
+          const reportMeta = metaRes.data;
+          reportStartDay = reportStartDay ?? reportMeta.report_start_day;
+          reportEndDay = reportEndDay ?? reportMeta.report_end_day;
 
-          const report = reportRes.data;
-          const days = Array.isArray(report) ? report : (report.days ?? report.data ?? []);
-
-          for (const day of days) {
-            const date: string = day.date;
-            if (!date) continue;
-
-            if (!merged[date]) {
-              merged[date] = {
-                date,
-                total_completions: 0,
-                total_chat_turns: 0,
-                total_premium_requests: 0,
-                sources: [],
-              };
-            }
-
-            const users = day.users ?? day.user_metrics ?? [];
-            const me = Array.isArray(users)
-              ? users.find((u: any) => (u.login ?? u.username) === username)
-              : null;
-
-            if (me) {
-              merged[date].total_completions += me.total_code_suggestions
-                ?? me.total_completions
-                ?? me.code_suggestions_count
-                ?? 0;
-              merged[date].total_chat_turns += me.total_chats
-                ?? me.total_chat_turns
-                ?? me.chat_turns
-                ?? 0;
-              merged[date].total_premium_requests += me.total_premium_requests
-                ?? me.premium_requests_count
-                ?? me.premium_requests
-                ?? 0;
-              merged[date].sources.push(src.slug);
+          for (const url of (reportMeta.download_links ?? [])) {
+            try {
+              const reportRes = await axios.get(url, {
+                headers: { Accept: 'application/json' },
+                transformRequest: [(d, h) => { delete (h as any).Authorization; return d; }],
+                maxContentLength: 50 * 1024 * 1024,
+              });
+              const report = reportRes.data;
+              const days = Array.isArray(report) ? report : (report.days ?? report.data ?? []);
+              for (const day of days) {
+                const date: string = day.date;
+                if (!date) continue;
+                if (!merged[date]) merged[date] = { date, total_completions: 0, total_chat_turns: 0, total_premium_requests: 0, sources: [] };
+                const users = day.users ?? day.user_metrics ?? [];
+                const me = Array.isArray(users) ? users.find((u: any) => (u.login ?? u.username) === username) : null;
+                if (me) {
+                  merged[date].total_completions += me.total_code_suggestions ?? me.total_completions ?? 0;
+                  merged[date].total_chat_turns += me.total_chats ?? me.total_chat_turns ?? 0;
+                  merged[date].total_premium_requests += me.total_premium_requests ?? me.premium_requests ?? 0;
+                  merged[date].sources.push(src.slug);
+                }
+              }
+            } catch (dlErr: any) {
+              attempts.push({ source: src.slug, tier: '1-download', status: 'error', detail: dlErr.message });
             }
           }
-        } catch (dlErr: any) {
-          console.error(`[${src.kind}:${src.slug}] download_link fetch failed:`, dlErr.response?.status ?? dlErr.message);
+          attempts.push({ source: src.slug, tier: '1-users-28-day', status: 'ok' });
+          dataTier = 'users-report';
+          continue; // Skip lower tiers for this source
+        } catch (err: any) {
+          const msg = err.response?.data?.message || err.message;
+          attempts.push({ source: src.slug, tier: '1-users-28-day', status: `${err.response?.status ?? 'error'}`, detail: msg });
+          console.error(`[Tier1 ${src.slug}] ${err.response?.status}: ${msg}`);
+        }
+      }
+
+      // ───── TIER 2: /orgs/{org}/copilot/metrics (older API, aggregated org data) ─────
+      if (src.kind === 'org') {
+        try {
+          // This endpoint uses the older API version and takes since/until as ISO timestamps
+          const metricsRes = await axios.get(`https://api.github.com/orgs/${src.slug}/copilot/metrics`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/vnd.github+json',
+            },
+          });
+          const metricsData: any[] = metricsRes.data ?? [];
+
+          for (const day of metricsData) {
+            const date: string = day.date;
+            if (!date) continue;
+            if (!merged[date]) merged[date] = { date, total_completions: 0, total_chat_turns: 0, total_premium_requests: 0, sources: [] };
+
+            // Aggregate completions from IDE
+            const ideCompl = day.copilot_ide_code_completions;
+            if (ideCompl?.editors) {
+              for (const editor of ideCompl.editors) {
+                for (const model of editor.models ?? []) {
+                  for (const lang of model.languages ?? []) {
+                    merged[date].total_completions += lang.total_code_acceptances ?? lang.total_code_suggestions ?? 0;
+                  }
+                }
+              }
+            }
+
+            // Aggregate chat turns
+            let chatTurns = 0;
+            let premiumProxy = 0;
+            const ideChat = day.copilot_ide_chat;
+            if (ideChat?.editors) {
+              for (const editor of ideChat.editors) {
+                for (const model of editor.models ?? []) {
+                  chatTurns += model.total_chats ?? 0;
+                  // Non-base models count as premium
+                  if (!/mini|3\.5|free/i.test(model.name ?? '')) {
+                    premiumProxy += model.total_chats ?? 0;
+                  }
+                }
+              }
+            }
+            const dotChat = day.copilot_dotcom_chat;
+            if (dotChat?.models) {
+              for (const model of dotChat.models) {
+                chatTurns += model.total_chats ?? 0;
+                if (!/mini|3\.5|free/i.test(model.name ?? '')) {
+                  premiumProxy += model.total_chats ?? 0;
+                }
+              }
+            }
+            const dotPR = day.copilot_dotcom_pull_requests;
+            if (dotPR?.repositories) {
+              for (const repo of dotPR.repositories) {
+                for (const model of repo.models ?? []) {
+                  premiumProxy += model.total_pr_summaries_created ?? 0;
+                }
+              }
+            }
+
+            merged[date].total_chat_turns += chatTurns;
+            merged[date].total_premium_requests += premiumProxy;
+            merged[date].sources.push(src.slug);
+          }
+
+          attempts.push({ source: src.slug, tier: '2-org-metrics', status: 'ok' });
+          if (dataTier === 'none') dataTier = 'org-aggregate';
+          continue;
+        } catch (err: any) {
+          const msg = err.response?.data?.message || err.message;
+          attempts.push({ source: src.slug, tier: '2-org-metrics', status: `${err.response?.status ?? 'error'}`, detail: msg });
+          console.error(`[Tier2 ${src.slug}] ${err.response?.status}: ${msg}`);
+        }
+      }
+
+      // ───── TIER 3: /orgs/{org}/copilot/metrics/reports/organization-28-day/latest ─────
+      if (src.kind === 'org') {
+        try {
+          const orgReportRes = await axios.get(
+            `https://api.github.com/orgs/${src.slug}/copilot/metrics/reports/organization-28-day/latest`,
+            { headers: ghHeaders }
+          );
+          const orgMeta = orgReportRes.data;
+          reportStartDay = reportStartDay ?? orgMeta.report_start_day;
+          reportEndDay = reportEndDay ?? orgMeta.report_end_day;
+
+          for (const url of (orgMeta.download_links ?? [])) {
+            try {
+              const rr = await axios.get(url, {
+                headers: { Accept: 'application/json' },
+                transformRequest: [(d, h) => { delete (h as any).Authorization; return d; }],
+                maxContentLength: 50 * 1024 * 1024,
+              });
+              const report = rr.data;
+              const days = Array.isArray(report) ? report : (report.days ?? report.data ?? []);
+              for (const day of days) {
+                const date: string = day.date;
+                if (!date) continue;
+                if (!merged[date]) merged[date] = { date, total_completions: 0, total_chat_turns: 0, total_premium_requests: 0, sources: [] };
+                merged[date].total_completions += day.total_completions ?? day.total_code_suggestions ?? 0;
+                merged[date].total_chat_turns += day.total_chats ?? day.total_chat_turns ?? 0;
+                merged[date].total_premium_requests += day.total_premium_requests ?? 0;
+                merged[date].sources.push(src.slug);
+              }
+            } catch {}
+          }
+
+          attempts.push({ source: src.slug, tier: '3-org-28-day', status: 'ok' });
+          if (dataTier === 'none') dataTier = 'org-report';
+          continue;
+        } catch (err: any) {
+          attempts.push({ source: src.slug, tier: '3-org-28-day', status: `${err.response?.status ?? 'error'}`, detail: err.response?.data?.message });
         }
       }
     }
@@ -406,20 +492,41 @@ async function startServer() {
     const daysOut = Object.values(merged).sort((a, b) => a.date.localeCompare(b.date));
     const orgsWithData = Array.from(new Set(daysOut.flatMap(d => d.sources)));
 
+    // Build helpful message for non-admin users
+    const allFailed = daysOut.length === 0;
+    const all403 = attempts.every(a => a.status === '403');
+    let message: string | undefined;
+
+    if (allFailed) {
+      if (all403) {
+        message = `All API tiers returned 403 (Forbidden) for "${username}" on ${sources.map(s => s.slug).join(', ')}.\n\n` +
+          `This means your token works but you don't have admin/billing-manager access to the org's Copilot metrics.\n\n` +
+          `Options:\n` +
+          `• Ask your org admin to grant you the "View Organization Copilot Metrics" role\n` +
+          `• Ask your org admin to enable the "Copilot usage metrics" policy in the enterprise settings\n` +
+          `• Ask your org admin to add you as a billing manager\n` +
+          `• The app will still show your plan limit (${PLAN_LIMITS.business ?? 300} premium requests/month for Business plans) and projected pacing — just without actual usage data from GitHub`;
+      } else {
+        message = `No usage data found. Attempted tiers: ${attempts.map(a => `${a.tier}:${a.status}`).join(', ')}`;
+      }
+    }
+
     return res.json({
       days: daysOut,
       scope: sources.some(s => s.kind === 'enterprise') ? 'enterprise' : 'organization',
       username,
+      data_tier: dataTier,
+      data_note: dataTier === 'org-aggregate'
+        ? 'Data is aggregate org-level (not per-user). Numbers reflect the entire org, not just your personal usage.'
+        : dataTier === 'org-report'
+          ? 'Data is from the org-level report (not per-user breakdown).'
+          : undefined,
       sources_queried: sources.map(s => `${s.kind}:${s.slug}`),
       orgs_with_data: orgsWithData,
       report_start_day: reportStartDay,
       report_end_day: reportEndDay,
-      errors: errors.length ? errors : undefined,
-      message: daysOut.length === 0
-        ? errors.length > 0
-          ? `No usage data found for "${username}". Errors: ${errors.map(e => `${e.kind}:${e.source} → ${e.status ?? ''} ${e.message ?? ''}`).join('; ')}`
-          : `No usage data found for "${username}" in ${sources.length} source(s). Possible causes: (a) the org/enterprise hasn't enabled the Copilot Usage Metrics policy, (b) you haven't used Copilot through this seat in 28 days, (c) the token isn't SSO-authorized for this org.`
-        : undefined,
+      attempts,
+      message,
     });
   });
 
