@@ -431,11 +431,6 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
                             ✓ Aggregated from {usage.orgsWithData.length} org(s): {usage.orgsWithData.join(', ')}
                           </p>
                         )}
-                        {usage.reportStartDay && usage.reportEndDay && (
-                          <p className="text-zinc-500">
-                            Report window: {usage.reportStartDay} → {usage.reportEndDay} (GitHub 28-day report)
-                          </p>
-                        )}
                         {usage.message && (
                           <p className="text-zinc-500">{usage.message}</p>
                         )}
