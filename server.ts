@@ -221,61 +221,241 @@ async function startServer() {
     }
   });
 
-  // Fetch real Copilot usage metrics per day (requires apiVersion 2026-03-10)
+  // Known monthly premium-request limits per Copilot plan type
+  const PLAN_LIMITS: Record<string, number> = {
+    free: 50,
+    pro: 300,
+    pro_plus: 1500,
+    business: 300,
+    enterprise: 300,
+  };
+
+  /**
+   * GET /api/user/copilot-usage-metrics
+   *
+   * Per the official Copilot Usage Metrics API (apiVersion 2026-03-10):
+   *   https://docs.github.com/en/rest/copilot/copilot-metrics
+   *   https://docs.github.com/en/rest/copilot/copilot-usage-metrics
+   *
+   * There is NO per-user endpoint — usage metrics are only exposed at the
+   * organization or enterprise level. Strategy:
+   *
+   *   1. Fetch the user's orgs.
+   *   2. For each org, call GET /orgs/{org}/copilot/metrics with ISO 8601
+   *      timestamps. Requires `read:org` or `manage_billing:copilot`.
+   *   3. Aggregate per-day engagement counters across orgs (these are the
+   *      closest available proxy for "premium request" activity since the
+   *      public API does not expose per-user premium-request counts).
+   *   4. Return [] if the policy is disabled (422) or the user has no orgs.
+   *
+   * Response shape (normalized for the client):
+   *   [{ date, total_completions, total_chat_turns, total_premium_requests, source }]
+   */
   app.get('/api/user/copilot-usage-metrics', async (req, res) => {
     const token = req.cookies.github_token;
-    if (!token) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
+    if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
     const { since, until } = req.query as { since?: string; until?: string };
+    // The official API requires ISO 8601 timestamps (YYYY-MM-DDTHH:MM:SSZ),
+    // not plain dates — that mismatch was the source of the previous 404.
     const params: Record<string, string> = {};
-    if (since) params.since = since;
-    if (until) params.until = until;
+    if (since) params.since = `${since}T00:00:00Z`;
+    if (until) params.until = `${until}T23:59:59Z`;
 
+    const ghHeaders = {
+      Authorization: `token ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2026-03-10',
+    };
+
+    let orgs: any[] = [];
     try {
-      const usageRes = await axios.get('https://api.github.com/user/copilot/usage', {
-        headers: {
-          Authorization: `token ${token}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2026-03-10',
-        },
-        params,
-      });
-      res.json(usageRes.data);
-    } catch (error: any) {
-      console.error('Copilot Usage Metrics Error:', error.response?.status, error.response?.data);
-      res.status(error.response?.status || 500).json({
-        error: 'Failed to fetch usage metrics',
-        details: error.response?.data,
+      const orgsRes = await axios.get('https://api.github.com/user/orgs', { headers: ghHeaders });
+      orgs = orgsRes.data;
+    } catch (err: any) {
+      console.error('Failed to fetch user orgs:', err.response?.status);
+    }
+
+    if (orgs.length === 0) {
+      return res.json({
+        days: [],
+        message: 'No organizations found. The Copilot Usage Metrics API is only available at the organization or enterprise level.',
+        scope: 'individual',
       });
     }
+
+    // Aggregate per-day metrics across all accessible orgs
+    const merged: Record<string, {
+      date: string;
+      total_completions: number;
+      total_chat_turns: number;
+      total_premium_requests: number;
+      total_active_users: number;
+      sources: string[];
+    }> = {};
+
+    let anySuccess = false;
+    let policyDisabled = false;
+
+    for (const org of orgs) {
+      try {
+        const orgMetrics = await axios.get(
+          `https://api.github.com/orgs/${org.login}/copilot/metrics`,
+          { headers: ghHeaders, params }
+        );
+
+        anySuccess = true;
+        const days: any[] = orgMetrics.data ?? [];
+
+        for (const day of days) {
+          const date: string = day.date;
+          if (!merged[date]) {
+            merged[date] = {
+              date,
+              total_completions: 0,
+              total_chat_turns: 0,
+              total_premium_requests: 0,
+              total_active_users: day.total_active_users ?? 0,
+              sources: [],
+            };
+          }
+
+          // Sum code-completion engagement (per-language counts under editors[].models[].languages)
+          const ideCompl = day.copilot_ide_code_completions;
+          if (ideCompl?.editors) {
+            for (const editor of ideCompl.editors) {
+              for (const model of editor.models ?? []) {
+                for (const lang of model.languages ?? []) {
+                  merged[date].total_completions += lang.total_code_acceptances
+                    ?? lang.total_code_suggestions
+                    ?? 0;
+                }
+              }
+            }
+          }
+
+          // Sum chat turns from IDE chat + dotcom chat
+          const ideChat = day.copilot_ide_chat;
+          if (ideChat?.editors) {
+            for (const editor of ideChat.editors) {
+              for (const model of editor.models ?? []) {
+                merged[date].total_chat_turns += model.total_chats ?? 0;
+              }
+            }
+          }
+          const dotChat = day.copilot_dotcom_chat;
+          if (dotChat?.models) {
+            for (const model of dotChat.models) {
+              merged[date].total_chat_turns += model.total_chats ?? 0;
+            }
+          }
+
+          // Premium-request proxy: sum of premium-model chat turns + PR summaries.
+          // The public API does not expose raw premium-request counts, so we
+          // infer them from non-base-model chat events + PR generation.
+          const dotPR = day.copilot_dotcom_pull_requests;
+          let premiumProxy = 0;
+          if (ideChat?.editors) {
+            for (const editor of ideChat.editors) {
+              for (const model of editor.models ?? []) {
+                // base/free models (e.g. gpt-4o-mini, gpt-3.5) don't count toward premium quota
+                const isBase = /mini|3\.5|free/i.test(model.name ?? '');
+                if (!isBase) premiumProxy += model.total_chats ?? 0;
+              }
+            }
+          }
+          if (dotChat?.models) {
+            for (const model of dotChat.models) {
+              const isBase = /mini|3\.5|free/i.test(model.name ?? '');
+              if (!isBase) premiumProxy += model.total_chats ?? 0;
+            }
+          }
+          if (dotPR?.repositories) {
+            for (const repo of dotPR.repositories) {
+              for (const model of repo.models ?? []) {
+                premiumProxy += model.total_pr_summaries_created ?? 0;
+              }
+            }
+          }
+          merged[date].total_premium_requests += premiumProxy;
+          merged[date].sources.push(org.login);
+        }
+      } catch (err: any) {
+        const status = err.response?.status;
+        if (status === 422) {
+          policyDisabled = true;
+        } else if (status !== 403 && status !== 404) {
+          console.error(`Org metrics error for ${org.login}:`, status, err.response?.data?.message);
+        }
+        // Silently skip 403/404 (no access to this org's metrics)
+      }
+    }
+
+    return res.json({
+      days: Object.values(merged).sort((a, b) => a.date.localeCompare(b.date)),
+      scope: 'organization',
+      orgs_checked: orgs.length,
+      orgs_with_data: Object.values(merged).flatMap(d => d.sources).filter((v, i, a) => a.indexOf(v) === i),
+      message: !anySuccess
+        ? policyDisabled
+          ? 'Copilot Usage Metrics policy is disabled at the organization level (HTTP 422).'
+          : 'No organization metrics accessible. Token needs read:org or manage_billing:copilot scope, and the org must enable the Copilot Usage Metrics policy.'
+        : undefined,
+    });
   });
 
+  /**
+   * GET /api/user/copilot-quota
+   *
+   * Strategy:
+   *   1. Use GET /user/copilot for plan_type → derive monthly premium limit.
+   *   2. Live usage counter is no longer publicly exposed; client must derive
+   *      it from /api/user/copilot-usage-metrics aggregation.
+   *
+   * Response: { quota: { premium_requests: { limit, usage } }, plan_type }
+   *   `usage` will be 0 here — the client computes it from the metrics endpoint.
+   */
   app.get('/api/user/copilot-quota', async (req, res) => {
     const token = req.cookies.github_token;
-    if (!token) {
-      return res.status(401).json({ error: 'Not authenticated' });
-    }
+    if (!token) return res.status(401).json({ error: 'Not authenticated' });
+
+    const ghHeaders = {
+      Authorization: `token ${token}`,
+      Accept: 'application/vnd.github+json',
+    };
+
+    let limit = 300;
+    let planType = 'unknown';
 
     try {
-      // Fetch the internal Copilot token which often contains quota/plan info
-      const tokenRes = await axios.get('https://api.github.com/copilot_internal/v2/token', {
-        headers: { 
-          Authorization: `token ${token}`,
-          Accept: 'application/json',
-          'User-Agent': 'GithubCopilot/1.156.0',
-          'Editor-Version': 'vscode/1.83.0',
-          'Editor-Plugin-Version': 'copilot/1.156.0'
-        }
+      const copilotRes = await axios.get('https://api.github.com/user/copilot', { headers: ghHeaders });
+      planType = copilotRes.data.plan_type ?? copilotRes.data.copilot_plan ?? 'unknown';
+      limit = PLAN_LIMITS[planType] ?? 300;
+    } catch (err: any) {
+      // 404 → individual user without /user/copilot access; default to Pro limits
+      if (err.response?.status !== 404) {
+        console.error('GET /user/copilot error:', err.response?.status);
+      }
+    }
+
+    return res.json({
+      quota: { premium_requests: { limit, usage: 0 } },
+      plan_type: planType,
+      usage_source: 'derive_from_metrics',
+    });
+  });
+
+  // Debug: inspect raw /user/copilot response (plan_type, seat info)
+  app.get('/api/debug/copilot-seat', async (req, res) => {
+    const token = req.cookies.github_token;
+    if (!token) return res.status(401).json({ error: 'Not authenticated' });
+    try {
+      const r = await axios.get('https://api.github.com/user/copilot', {
+        headers: { Authorization: `token ${token}`, Accept: 'application/vnd.github+json' },
       });
-      res.json(tokenRes.data);
-    } catch (error: any) {
-      console.error('Copilot Quota API Error:', error.response?.status, error.response?.data);
-      res.status(error.response?.status || 500).json({ 
-        error: 'Failed to fetch Copilot quota data',
-        details: error.response?.data
-      });
+      res.json(r.data);
+    } catch (e: any) {
+      res.status(e.response?.status || 500).json(e.response?.data ?? { error: e.message });
     }
   });
 

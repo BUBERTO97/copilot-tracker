@@ -5,8 +5,15 @@ import { getSubscriptionCycle } from './calculations';
 
 const EMPTY: CopilotUsageSummary = { connected: false, cycleTotal: 0, limit: 0, byDate: {} };
 
+export interface CopilotUsageSummaryEx extends CopilotUsageSummary {
+  scope?: 'individual' | 'organization';
+  message?: string;
+  planType?: string;
+  orgsWithData?: string[];
+}
+
 export function useGithubUsage(settings: UserSettings) {
-  const [usage, setUsage] = useState<CopilotUsageSummary>(EMPTY);
+  const [usage, setUsage] = useState<CopilotUsageSummaryEx>(EMPTY);
 
   const fetchUsage = useCallback(async () => {
     try {
@@ -18,7 +25,6 @@ export function useGithubUsage(settings: UserSettings) {
       }
 
       const { start, end } = getSubscriptionCycle(new Date(), settings);
-      // end is exclusive in our cycle logic, so subtract 1 day for the API "until"
       const since = format(start, 'yyyy-MM-dd');
       const until = format(addDays(end, -1), 'yyyy-MM-dd');
 
@@ -27,46 +33,53 @@ export function useGithubUsage(settings: UserSettings) {
         fetch('/api/user/copilot-quota'),
       ]);
 
-      if (!usageRes.ok) {
-        setUsage(EMPTY);
-        return;
+      // Quota — limit + plan type
+      let limit = 0;
+      let planType = 'unknown';
+      if (quotaRes.ok) {
+        const q = await quotaRes.json();
+        limit = q.quota?.premium_requests?.limit ?? 0;
+        planType = q.plan_type ?? 'unknown';
       }
 
-      const usageData: any[] = await usageRes.json();
+      // Usage metrics — server now returns { days, scope, message, orgs_with_data }
+      let days: any[] = [];
+      let scope: 'individual' | 'organization' = 'individual';
+      let message: string | undefined;
+      let orgsWithData: string[] = [];
 
-      let limit = 0;
-      if (quotaRes.ok) {
-        const quotaData = await quotaRes.json();
-        limit = quotaData.quota?.premium_requests?.limit ?? 0;
+      if (usageRes.ok) {
+        const data = await usageRes.json();
+        days = data.days ?? [];
+        scope = data.scope ?? 'individual';
+        message = data.message;
+        orgsWithData = data.orgs_with_data ?? [];
       }
 
       const byDate: Record<string, CopilotDayUsage> = {};
       let cycleTotal = 0;
 
-      for (const day of usageData) {
-        // `total_premium_requests` is the field in apiVersion 2026-03-10
-        // fall back to summing premium-tier model completions if absent
-        let premiumReqs: number = day.total_premium_requests ?? 0;
-        if (!premiumReqs && Array.isArray(day.models)) {
-          premiumReqs = (day.models as any[]).reduce((sum: number, model: any) => {
-            // Count completions + chat from non-base (premium) models
-            if (model.is_custom_model || (model.name && !model.name.startsWith('gpt-3'))) {
-              return sum + (model.total_completions ?? 0) + (model.total_chat_turns ?? 0);
-            }
-            return sum;
-          }, 0);
-        }
-
+      for (const day of days) {
+        const premiumReqs = day.total_premium_requests ?? 0;
         byDate[day.date] = {
           date: day.date,
-          total_completions: day.total_completions ?? day.total_suggestions_count ?? 0,
+          total_completions: day.total_completions ?? 0,
           total_chat_turns: day.total_chat_turns ?? 0,
           premium_requests: premiumReqs,
         };
         cycleTotal += premiumReqs;
       }
 
-      setUsage({ connected: true, cycleTotal, limit, byDate });
+      setUsage({
+        connected: true,
+        cycleTotal,
+        limit,
+        byDate,
+        scope,
+        message,
+        planType,
+        orgsWithData,
+      });
     } catch (err) {
       console.error('Failed to fetch Copilot usage:', err);
     }
@@ -74,10 +87,9 @@ export function useGithubUsage(settings: UserSettings) {
 
   useEffect(() => {
     fetchUsage();
-    const interval = setInterval(fetchUsage, 5 * 60 * 1000); // refresh every 5 min
+    const interval = setInterval(fetchUsage, 5 * 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchUsage]);
 
   return { usage, refresh: fetchUsage };
 }
-

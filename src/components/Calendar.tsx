@@ -12,15 +12,16 @@ import {
   isToday
 } from 'date-fns';
 import { ChevronLeft, ChevronRight, Settings as SettingsIcon, Github, Bot, Calendar as CalendarIcon, TrendingUp } from 'lucide-react';
-import { UserSettings, CopilotUsageSummary } from '../types';
+import { UserSettings } from '../types';
 import { calculateDayValue } from '../lib/calculations';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import type { CopilotUsageSummaryEx } from '../lib/useGithubUsage';
 
 interface CalendarProps {
   settings: UserSettings;
   onOpenSettings: () => void;
-  usage: CopilotUsageSummary;
+  usage: CopilotUsageSummaryEx;
 }
 
 export default function Calendar({ settings, onOpenSettings, usage }: CalendarProps) {
@@ -202,6 +203,20 @@ export default function Calendar({ settings, onOpenSettings, usage }: CalendarPr
             <span className="w-3 h-1.5 rounded-full bg-blue-500 inline-block" />
             Actual premium requests (% of limit)
           </span>
+        </div>
+      )}
+
+      {/* Info banner when no usage data is available */}
+      {usage.connected && usage.message && Object.keys(usage.byDate).length === 0 && (
+        <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-mono text-amber-800 leading-relaxed">
+          <p className="font-bold mb-1">⚠ Live usage data unavailable</p>
+          <p>{usage.message}</p>
+          {usage.scope === 'individual' && (
+            <p className="mt-2 text-amber-700">
+              GitHub does not expose Copilot usage metrics for individual subscribers via REST API.
+              Plan limit shown is derived from your subscription type ({usage.planType ?? 'unknown'}).
+            </p>
+          )}
         </div>
       )}
 

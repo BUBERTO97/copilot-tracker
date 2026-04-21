@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { X, Save, Github, LogOut, CheckCircle2, AlertCircle, TrendingUp } from 'lucide-react';
-import { UserSettings, RenewalType, CopilotUsageSummary } from '../types';
+import { X, Save, Github, LogOut, CheckCircle2, AlertCircle } from 'lucide-react';
+import { UserSettings, RenewalType } from '../types';
 import { motion } from 'motion/react';
 import { cn } from '../lib/utils';
 import { calculateDayValue, calculateCycleData } from '../lib/calculations';
 import { format } from 'date-fns';
+import type { CopilotUsageSummaryEx } from '../lib/useGithubUsage';
 
 interface SettingsProps {
   settings: UserSettings;
   onSave: (settings: UserSettings) => void;
   onClose: () => void;
-  usage: CopilotUsageSummary;
+  usage: CopilotUsageSummaryEx;
 }
 
 export default function Settings({ settings, onSave, onClose, usage }: SettingsProps) {
@@ -418,9 +419,22 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
                         })()}
                       </div>
 
-                      <div className="pt-2 text-xs text-zinc-500 leading-relaxed">
-                        <p>Additional premium requests available after limit is reached.</p>
-                        <p>The green marker shows where your target pace should be today.</p>
+                      <div className="pt-2 text-xs text-zinc-500 leading-relaxed space-y-1">
+                        {usage.scope === 'individual' && (
+                          <p className="text-amber-400">
+                            ⓘ Individual Copilot Pro/Pro+ accounts have no public usage API.
+                            Limit shown is derived from plan type ({usage.planType ?? 'unknown'}).
+                          </p>
+                        )}
+                        {usage.scope === 'organization' && usage.orgsWithData && usage.orgsWithData.length > 0 && (
+                          <p className="text-emerald-400">
+                            ✓ Aggregated from {usage.orgsWithData.length} org(s): {usage.orgsWithData.join(', ')}
+                          </p>
+                        )}
+                        {usage.message && (
+                          <p className="text-zinc-500">{usage.message}</p>
+                        )}
+                        <p>The grey marker shows where your target pace should be today.</p>
                       </div>
                     </div>
                   </div>
