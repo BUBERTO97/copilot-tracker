@@ -235,25 +235,23 @@ async function startServer() {
    *
    * Official Copilot Usage Metrics API (apiVersion 2026-03-10).
    * All endpoints return signed download_links — not data directly.
-   *
    *   https://docs.github.com/en/rest/copilot/copilot-usage-metrics?apiVersion=2026-03-10
    *
-   * Strategy:
-   *   1. Fetch the user's orgs.
-   *   2. For each org, call:
-   *        GET /orgs/{org}/copilot/metrics/reports/users-28-day/latest
-   *      This returns `{ download_links[], report_start_day, report_end_day }`.
-   *   3. Follow each download_link (they are signed S3-style URLs — no auth needed),
-   *      parse the JSON report, and filter daily records to the authenticated user.
-   *   4. Aggregate per-day engagement across all reports (completions, chat turns,
-   *      premium-request proxy).
+   * Query params:
+   *   ?org=SLUG           — explicit org slug (preferred; bypasses /user/orgs which misses SAML-SSO/private orgs)
+   *   ?enterprise=SLUG    — explicit enterprise slug (uses /enterprises/{SLUG}/copilot/metrics/reports/...)
    *
-   * Required scopes: `read:org` OR `manage_billing:copilot` on the token,
-   *                  AND the org must enable the Copilot Usage Metrics policy.
+   * If neither is provided, auto-discovers via /user/memberships/orgs
+   * (which includes private memberships, unlike /user/orgs).
    */
   app.get('/api/user/copilot-usage-metrics', async (req, res) => {
     const token = req.cookies.github_token;
     if (!token) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { org: orgSlug, enterprise: entSlug } = req.query as {
+      org?: string;
+      enterprise?: string;
+    };
 
     const ghHeaders = {
       Authorization: `Bearer ${token}`,
@@ -261,32 +259,62 @@ async function startServer() {
       'X-GitHub-Api-Version': '2026-03-10',
     };
 
-    // Fetch user + orgs in parallel
+    // 1. Identify the authenticated user
     let username = '';
-    let orgs: any[] = [];
     try {
-      const [userRes, orgsRes] = await Promise.all([
-        axios.get('https://api.github.com/user', { headers: ghHeaders }),
-        axios.get('https://api.github.com/user/orgs', { headers: ghHeaders }),
-      ]);
+      const userRes = await axios.get('https://api.github.com/user', { headers: ghHeaders });
       username = userRes.data.login;
-      orgs = orgsRes.data;
     } catch (err: any) {
       return res.status(err.response?.status || 500).json({
-        error: 'Failed to fetch user/orgs',
+        error: 'Failed to fetch authenticated user',
         details: err.response?.data,
       });
     }
 
-    if (orgs.length === 0) {
+    // 2. Build the list of report sources to query
+    interface ReportSource { kind: 'org' | 'enterprise'; slug: string; }
+    const sources: ReportSource[] = [];
+
+    if (entSlug) sources.push({ kind: 'enterprise', slug: entSlug });
+    if (orgSlug) sources.push({ kind: 'org', slug: orgSlug });
+
+    // Auto-discovery fallback — only if the user didn't specify anything
+    if (sources.length === 0) {
+      // /user/memberships/orgs includes PRIVATE memberships (unlike /user/orgs)
+      // and is the correct endpoint for SAML-SSO-protected org discovery.
+      try {
+        const mRes = await axios.get('https://api.github.com/user/memberships/orgs?state=active', {
+          headers: ghHeaders,
+        });
+        for (const m of (mRes.data as any[])) {
+          if (m.organization?.login) sources.push({ kind: 'org', slug: m.organization.login });
+        }
+      } catch (err: any) {
+        console.error('Failed to list org memberships:', err.response?.status);
+      }
+
+      // Secondary fallback: /user/orgs (public only)
+      if (sources.length === 0) {
+        try {
+          const oRes = await axios.get('https://api.github.com/user/orgs', { headers: ghHeaders });
+          for (const o of (oRes.data as any[])) {
+            if (o.login) sources.push({ kind: 'org', slug: o.login });
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (sources.length === 0) {
       return res.json({
         days: [],
         scope: 'individual',
-        message: 'No organizations found. The Copilot Usage Metrics API (apiVersion 2026-03-10) is only available at the organization or enterprise level — not for individual Copilot Pro/Pro+ subscribers.',
+        message: 'No organization or enterprise specified, and none found via /user/memberships/orgs. For SAML-SSO-protected orgs, specify the slug explicitly in Settings → GitHub Integration → Org/Enterprise slug. Note: SSO-protected orgs require the token to be authorized for SSO (Settings → Developer settings → PAT → Configure SSO).',
       });
     }
 
-    // Aggregated per-day data across all orgs, filtered to the authenticated user
+    // 3. Per-day aggregation filtered to the authenticated user
     const merged: Record<string, {
       date: string;
       total_completions: number;
@@ -295,47 +323,43 @@ async function startServer() {
       sources: string[];
     }> = {};
 
-    const errors: Array<{ org: string; status?: number; message?: string }> = [];
+    const errors: Array<{ source: string; kind: string; status?: number; message?: string }> = [];
     let reportStartDay: string | undefined;
     let reportEndDay: string | undefined;
 
-    for (const org of orgs) {
-      // Step 1: get download links for this org's users-28-day report
+    for (const src of sources) {
+      const reportPath = src.kind === 'enterprise'
+        ? `https://api.github.com/enterprises/${src.slug}/copilot/metrics/reports/users-28-day/latest`
+        : `https://api.github.com/orgs/${src.slug}/copilot/metrics/reports/users-28-day/latest`;
+
       let reportMeta: { download_links: string[]; report_start_day: string; report_end_day: string };
       try {
-        const metaRes = await axios.get(
-          `https://api.github.com/orgs/${org.login}/copilot/metrics/reports/users-28-day/latest`,
-          { headers: ghHeaders }
-        );
+        const metaRes = await axios.get(reportPath, { headers: ghHeaders });
         reportMeta = metaRes.data;
         reportStartDay = reportStartDay ?? reportMeta.report_start_day;
         reportEndDay = reportEndDay ?? reportMeta.report_end_day;
       } catch (err: any) {
         const status = err.response?.status;
-        if (status !== 403 && status !== 404) {
-          errors.push({ org: org.login, status, message: err.response?.data?.message });
-          console.error(`[${org.login}] users-28-day report error:`, status, err.response?.data?.message);
-        }
+        const msg = err.response?.data?.message || err.message;
+        errors.push({ source: src.slug, kind: src.kind, status, message: msg });
+        console.error(`[${src.kind}:${src.slug}] users-28-day report error:`, status, msg);
         continue;
       }
 
-      if (!reportMeta.download_links?.length) continue;
+      if (!reportMeta.download_links?.length) {
+        errors.push({ source: src.slug, kind: src.kind, message: 'Report returned no download_links' });
+        continue;
+      }
 
-      // Step 2: fetch each download_link (signed URL — strip auth headers)
       for (const url of reportMeta.download_links) {
         try {
           const reportRes = await axios.get(url, {
-            // Signed URLs must NOT carry the GitHub Authorization header
             headers: { Accept: 'application/json' },
-            transformRequest: [(data, headers) => {
-              delete (headers as any).Authorization;
-              return data;
-            }],
+            transformRequest: [(d, h) => { delete (h as any).Authorization; return d; }],
             maxContentLength: 50 * 1024 * 1024,
           });
 
           const report = reportRes.data;
-          // Report structure: array of days, each with per-user breakdown
           const days = Array.isArray(report) ? report : (report.days ?? report.data ?? []);
 
           for (const day of days) {
@@ -352,7 +376,6 @@ async function startServer() {
               };
             }
 
-            // Look for per-user breakdown and filter to the authenticated user
             const users = day.users ?? day.user_metrics ?? [];
             const me = Array.isArray(users)
               ? users.find((u: any) => (u.login ?? u.username) === username)
@@ -371,11 +394,11 @@ async function startServer() {
                 ?? me.premium_requests_count
                 ?? me.premium_requests
                 ?? 0;
-              merged[date].sources.push(org.login);
+              merged[date].sources.push(src.slug);
             }
           }
         } catch (dlErr: any) {
-          console.error(`[${org.login}] download_link fetch failed:`, dlErr.response?.status ?? dlErr.message);
+          console.error(`[${src.kind}:${src.slug}] download_link fetch failed:`, dlErr.response?.status ?? dlErr.message);
         }
       }
     }
@@ -385,14 +408,17 @@ async function startServer() {
 
     return res.json({
       days: daysOut,
-      scope: 'organization',
-      orgs_checked: orgs.map(o => o.login),
+      scope: sources.some(s => s.kind === 'enterprise') ? 'enterprise' : 'organization',
+      username,
+      sources_queried: sources.map(s => `${s.kind}:${s.slug}`),
       orgs_with_data: orgsWithData,
       report_start_day: reportStartDay,
       report_end_day: reportEndDay,
       errors: errors.length ? errors : undefined,
       message: daysOut.length === 0
-        ? `No usage data found for user "${username}" in any of the ${orgs.length} accessible org(s). This can mean: (a) none of your orgs have the Copilot Usage Metrics policy enabled, (b) your token lacks read:org / manage_billing:copilot scope, or (c) you haven't used Copilot through an org seat in the last 28 days.`
+        ? errors.length > 0
+          ? `No usage data found for "${username}". Errors: ${errors.map(e => `${e.kind}:${e.source} → ${e.status ?? ''} ${e.message ?? ''}`).join('; ')}`
+          : `No usage data found for "${username}" in ${sources.length} source(s). Possible causes: (a) the org/enterprise hasn't enabled the Copilot Usage Metrics policy, (b) you haven't used Copilot through this seat in 28 days, (c) the token isn't SSO-authorized for this org.`
         : undefined,
     });
   });

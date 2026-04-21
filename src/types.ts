@@ -7,6 +7,10 @@ export interface UserSettings {
   renewalValue: number; // days if 'days', day of month if 'monthly_fixed'
   lastRenewalDate: string; // ISO string
   maxPercentage: number; // 0-100
+  /** Optional: explicit GitHub organization slug (e.g. "ELX-EMCC-DevOps") to query metrics for. */
+  organizationSlug?: string;
+  /** Optional: explicit GitHub enterprise slug to query enterprise metrics for. */
+  enterpriseSlug?: string;
 }
 
 export interface DayData {

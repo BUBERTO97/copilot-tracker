@@ -4,7 +4,7 @@ import { UserSettings, CopilotDayUsage, CopilotUsageSummary } from '../types';
 const EMPTY: CopilotUsageSummary = { connected: false, cycleTotal: 0, limit: 0, byDate: {} };
 
 export interface CopilotUsageSummaryEx extends CopilotUsageSummary {
-  scope?: 'individual' | 'organization';
+  scope?: 'individual' | 'organization' | 'enterprise';
   message?: string;
   planType?: string;
   orgsWithData?: string[];
@@ -12,7 +12,7 @@ export interface CopilotUsageSummaryEx extends CopilotUsageSummary {
   reportEndDay?: string;
 }
 
-export function useGithubUsage(_settings: UserSettings) {
+export function useGithubUsage(settings: UserSettings) {
   const [usage, setUsage] = useState<CopilotUsageSummaryEx>(EMPTY);
 
   const fetchUsage = useCallback(async () => {
@@ -24,10 +24,14 @@ export function useGithubUsage(_settings: UserSettings) {
         return;
       }
 
-      // The 2026-03-10 reports API returns a fixed 28-day window (latest) —
-      // no since/until parameters are supported. Cycle filtering is done client-side.
+      // Build query string with explicit org/enterprise if the user set them in settings
+      const qs = new URLSearchParams();
+      if (settings.organizationSlug) qs.set('org', settings.organizationSlug);
+      if (settings.enterpriseSlug) qs.set('enterprise', settings.enterpriseSlug);
+      const qsStr = qs.toString() ? `?${qs.toString()}` : '';
+
       const [usageRes, quotaRes] = await Promise.all([
-        fetch('/api/user/copilot-usage-metrics'),
+        fetch(`/api/user/copilot-usage-metrics${qsStr}`),
         fetch('/api/user/copilot-quota'),
       ]);
 
@@ -40,7 +44,7 @@ export function useGithubUsage(_settings: UserSettings) {
       }
 
       let days: any[] = [];
-      let scope: 'individual' | 'organization' = 'individual';
+      let scope: 'individual' | 'organization' | 'enterprise' = 'individual';
       let message: string | undefined;
       let orgsWithData: string[] = [];
       let reportStartDay: string | undefined;
@@ -85,7 +89,7 @@ export function useGithubUsage(_settings: UserSettings) {
     } catch (err) {
       console.error('Failed to fetch Copilot usage:', err);
     }
-  }, []);
+  }, [settings.organizationSlug, settings.enterpriseSlug]);
 
   useEffect(() => {
     fetchUsage();

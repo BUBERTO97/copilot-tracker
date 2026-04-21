@@ -261,7 +261,42 @@ export default function Settings({ settings, onSave, onClose, usage }: SettingsP
             <label className="text-xs font-mono font-bold text-zinc-400 uppercase tracking-tighter">
               GitHub Integration
             </label>
-            
+
+            {/* Org / Enterprise slug inputs — required for SAML-SSO orgs that don't appear in /user/orgs */}
+            <div className="space-y-3 p-3 bg-zinc-50 rounded-xl border border-zinc-200">
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-tighter">
+                  Organization Slug (optional)
+                </label>
+                <input
+                  type="text"
+                  value={localSettings.organizationSlug ?? ''}
+                  onChange={(e) => setLocalSettings({ ...localSettings, organizationSlug: e.target.value.trim() || undefined })}
+                  placeholder="e.g. ELX-EMCC-DevOps"
+                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-zinc-900/10 transition-all"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-tighter">
+                  Enterprise Slug (optional)
+                </label>
+                <input
+                  type="text"
+                  value={localSettings.enterpriseSlug ?? ''}
+                  onChange={(e) => setLocalSettings({ ...localSettings, enterpriseSlug: e.target.value.trim() || undefined })}
+                  placeholder="e.g. my-enterprise"
+                  className="w-full px-3 py-2 bg-white border border-zinc-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-zinc-900/10 transition-all"
+                />
+              </div>
+              <p className="text-[10px] text-zinc-500 leading-tight">
+                Required for <strong>SAML-SSO-protected</strong> orgs (don't appear in auto-discovery).
+                Your PAT must be <strong>SSO-authorized</strong> for the org
+                (Settings → Developer settings → Personal access tokens → Configure SSO).
+                Scopes: <code className="bg-zinc-200 px-1 rounded">read:org</code> +{' '}
+                <code className="bg-zinc-200 px-1 rounded">manage_billing:copilot</code>.
+              </p>
+            </div>
+
             {!githubStatus.connected ? (
               <div className="space-y-3">
                 <button

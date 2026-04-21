@@ -210,10 +210,11 @@ export default function Calendar({ settings, onOpenSettings, usage }: CalendarPr
       {usage.connected && usage.message && Object.keys(usage.byDate).length === 0 && (
         <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-mono text-amber-800 leading-relaxed">
           <p className="font-bold mb-1">⚠ Live usage data unavailable</p>
-          <p>{usage.message}</p>
+          <p className="whitespace-pre-wrap">{usage.message}</p>
           {usage.scope === 'individual' && (
             <p className="mt-2 text-amber-700">
-              GitHub does not expose Copilot usage metrics for individual subscribers via REST API.
+              Tip: if you're an enterprise/org user, open <strong>Settings</strong> and enter your
+              Organization or Enterprise slug manually (SAML-SSO orgs don't appear in auto-discovery).
               Plan limit shown is derived from your subscription type ({usage.planType ?? 'unknown'}).
             </p>
           )}
